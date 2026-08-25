@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env
+.env.*
+*token*.txt
+*.token
+
+# npm publish credentials. npm reads its "project" config from the directory
+# holding package.json — NOT from any ancestor — so a repo-root .npmrc is
+# invisible here and this copy is what makes `npm publish` work from cli/.
+# Ignored before it exists; the token has publish rights on the whole scope.
+.npmrc

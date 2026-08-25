@@ -1,0 +1,54 @@
+{
+  "name": "@scriptivox-api/cli",
+  "version": "1.0.2",
+  "description": "Command-line client for the Scriptivox transcription API — transcribe audio and video from your shell or a script. 119 languages, speaker diarization, word-level timestamps, SRT/VTT/text export.",
+  "keywords": [
+    "cli",
+    "transcription",
+    "speech-to-text",
+    "subtitles",
+    "srt",
+    "vtt",
+    "audio",
+    "video",
+    "scriptivox",
+    "scriptivox-api"
+  ],
+  "license": "MIT",
+  "author": "Scriptivox",
+  "homepage": "https://platform.scriptivox.com/docs/cli",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SparkleOfficial/scriptivox-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/SparkleOfficial/scriptivox-cli/issues",
+    "email": "support@scriptivox.com"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "scriptivox-api": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "smoke": "npm run build && node --test test/smoke.mjs",
+    "test": "npm run smoke",
+    "prepublishOnly": "npm run build && npm run test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
