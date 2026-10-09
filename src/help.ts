@@ -34,7 +34,7 @@ COMMANDS
   status <id>             Show a job's current status
   get <id>                Print the transcript (add --format srt|vtt|text for captions)
   list                    List your transcriptions
-  cancel <id>             Cancel an in-flight job and release its reserved balance
+  cancel <id>             Cancel a job before it starts transcribing (release its balance)
   delete <id>             Soft-delete a finished transcription
   balance                 Show remaining balance and estimated audio hours
 
