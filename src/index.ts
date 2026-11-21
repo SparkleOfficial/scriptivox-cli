@@ -6,6 +6,7 @@ import { UsageError } from './errors.js';
 import { createEmitter } from './output.js';
 import { helpText, isCommand } from './help.js';
 import { DEFAULT_BASE_URL, NO_API_KEY_MESSAGE, type CliConfig } from './config.js';
+import { utc } from './serviceStatus.js';
 
 /**
  * @scriptivox-api/cli — command-line client for the Scriptivox transcription API.
@@ -18,6 +19,8 @@ import { DEFAULT_BASE_URL, NO_API_KEY_MESSAGE, type CliConfig } from './config.j
  *   0  success
  *   1  usage error — bad arguments, missing key, unreadable file
  *   2  API error — the machine-readable code is printed on stderr
+ *   3  service-status only: new jobs are paused for maintenance
+ *   4  service-status only: the status could not be checked (not "down")
  */
 
 const EXIT_OK = 0;
@@ -54,7 +57,8 @@ async function main(argv: string[]): Promise<number> {
 
   const apiKey =
     flagString(args.flags, 'api-key') ?? process.env.SCRIPTIVOX_API_KEY ?? '';
-  if (!apiKey) {
+  // service-status calls GET /v1/status, which needs no key (and is sent none).
+  if (!apiKey && args.command !== 'service-status') {
     process.stderr.write(NO_API_KEY_MESSAGE + '\n');
     return EXIT_USAGE;
   }
@@ -71,8 +75,8 @@ async function main(argv: string[]): Promise<number> {
     pollTimeoutSeconds: flagNumber(args.flags, 'poll-timeout') ?? 600,
   };
 
-  await runCommand(args.command, { api: new ScriptivoxApi(config), args, out });
-  return EXIT_OK;
+  const code = await runCommand(args.command, { api: new ScriptivoxApi(config), args, out });
+  return code ?? EXIT_OK;
 }
 
 main(process.argv.slice(2))
@@ -85,6 +89,11 @@ main(process.argv.slice(2))
       process.stderr.write(`${err.code}: ${err.message}\n`);
       if (err.retryAfter) {
         process.stderr.write(`Retry after ${err.retryAfter}s.\n`);
+      }
+      if (err.code === 'MAINTENANCE') {
+        // Paused for maintenance: nothing was created or charged. Say when, and where to look.
+        if (err.backBy) process.stderr.write(`Expected back by ${utc(err.backBy)}.\n`);
+        process.stderr.write('Nothing was created or charged. See what is paused with: scriptivox-api service-status\n');
       }
       process.stderr.write(`See ${err.docsUrl}\n`);
       process.exitCode = EXIT_API;

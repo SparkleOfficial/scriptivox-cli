@@ -6,13 +6,13 @@ import type { CliConfig } from './config.js';
 import { DOCS_URL } from './config.js';
 
 /**
- * Thin client over the seven public API operations. Mirrors the OpenAPI
+ * Thin client over the public API operations this CLI uses. Mirrors the OpenAPI
  * document at https://platform.scriptivox.com/openapi.json one-to-one — one
  * method per operationId, no convenience endpoints that the API does not have.
  */
 
 export interface ApiErrorBody {
-  error?: { code?: string; message?: string; docs_url?: string };
+  error?: { code?: string; message?: string; docs_url?: string; back_by?: string | null };
   retry_after?: number;
 }
 
@@ -25,15 +25,20 @@ export class ApiError extends Error {
   readonly code: string;
   readonly docsUrl: string;
   readonly retryAfter?: number;
+  /** On a 503 MAINTENANCE: when the pause is expected to end (ISO 8601, UTC), if a time was set. */
+  readonly backBy?: string;
 
-  constructor(status: number, body: ApiErrorBody | null, fallback: string) {
+  constructor(status: number, body: ApiErrorBody | null, fallback: string, retryAfterHeader?: string | null) {
     const code = body?.error?.code ?? 'UNKNOWN_ERROR';
     super(body?.error?.message ?? fallback);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
     this.docsUrl = body?.error?.docs_url ?? `${DOCS_URL}/api-reference#error-codes`;
-    this.retryAfter = body?.retry_after;
+    // The Retry-After header (whole seconds) is what a 503 carries; the gateway's own 429 also puts it in the body.
+    const fromHeader = retryAfterHeader && /^\d+$/.test(retryAfterHeader.trim()) ? Number(retryAfterHeader.trim()) : undefined;
+    this.retryAfter = fromHeader ?? body?.retry_after;
+    this.backBy = typeof body?.error?.back_by === 'string' ? body.error.back_by : undefined;
   }
 }
 
@@ -135,7 +140,7 @@ export class ScriptivoxApi {
       `/transcribe/${encodeURIComponent(id)}?${query.toString()}`
     );
     const text = await res.text();
-    if (!res.ok) throw new ApiError(res.status, safeJson(text), text.slice(0, 200));
+    if (!res.ok) throw new ApiError(res.status, safeJson(text), text.slice(0, 200), res.headers.get('retry-after'));
     return text;
   }
 
@@ -144,7 +149,7 @@ export class ScriptivoxApi {
     const res = await this.fetch('DELETE', `/transcribe/${encodeURIComponent(id)}`);
     if (!res.ok) {
       const text = await res.text();
-      throw new ApiError(res.status, safeJson(text), text.slice(0, 200));
+      throw new ApiError(res.status, safeJson(text), text.slice(0, 200), res.headers.get('retry-after'));
     }
   }
 
@@ -179,6 +184,15 @@ export class ScriptivoxApi {
       estimated_hours_available?: number;
       deposit_url?: string;
     }>('GET', '/balance');
+  }
+
+  /**
+   * operationId: getServiceStatus. Needs no API key, so none is sent. Returns
+   * the parsed body as the API sent it, unchecked: serviceStatus.ts decides
+   * whether it is a usable status (anything else is "could not check").
+   */
+  getServiceStatus(): Promise<unknown> {
+    return this.request<unknown>('GET', '/status', { auth: false });
   }
 
   // ─── Composed helpers ────────────────────────────────────────────────────
@@ -248,13 +262,13 @@ export class ScriptivoxApi {
   private async request<T>(
     method: string,
     path: string,
-    opts: { body?: unknown; idempotencyKey?: string } = {}
+    opts: { body?: unknown; idempotencyKey?: string; auth?: boolean } = {}
   ): Promise<T> {
-    const res = await this.fetch(method, path, opts.body, opts.idempotencyKey);
+    const res = await this.fetch(method, path, opts.body, opts.idempotencyKey, opts.auth);
     const text = await res.text();
 
     if (!res.ok) {
-      throw new ApiError(res.status, safeJson(text), text.slice(0, 200));
+      throw new ApiError(res.status, safeJson(text), text.slice(0, 200), res.headers.get('retry-after'));
     }
 
     if (!text) return undefined as T;
@@ -278,13 +292,15 @@ export class ScriptivoxApi {
     method: string,
     path: string,
     body?: unknown,
-    idempotencyKey?: string
+    idempotencyKey?: string,
+    auth = true
   ): Promise<Response> {
     const headers: Record<string, string> = {
-      Authorization: this.config.apiKey,
       Accept: 'application/json',
       'User-Agent': `scriptivox-api-cli/${CLI_VERSION}`,
     };
+    // GET /status needs no key: send none rather than an empty or real one.
+    if (auth) headers.Authorization = this.config.apiKey;
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     // Only sent when the caller asked for it. Without the header the endpoints
     // behave normally (no caching), which is the right default for a CLI where

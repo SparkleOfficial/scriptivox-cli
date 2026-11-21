@@ -4,13 +4,15 @@ import { flagBool, flagNumber, flagString, type ParsedArgs } from './args.js';
 import { formatCents, formatDuration, type Emitter } from './output.js';
 import type { CommandName } from './help.js';
 import { UsageError } from './errors.js';
+import { COULD_NOT_CHECK_LINE, EXIT_COULD_NOT_CHECK, statusLine } from './serviceStatus.js';
 
 export { UsageError };
 
 /**
- * One function per command. Each returns nothing and writes through `out`;
- * failures throw (ApiError for anything the server rejected, UsageError for
- * anything the caller got wrong) and are turned into exit codes in index.ts.
+ * One function per command. Each writes through `out`; failures throw
+ * (ApiError for anything the server rejected, UsageError for anything the
+ * caller got wrong) and are turned into exit codes in index.ts. Only
+ * service-status returns an exit code of its own (0, 3 or 4).
  */
 
 export interface CommandContext {
@@ -22,8 +24,9 @@ export interface CommandContext {
 export async function runCommand(
   name: CommandName,
   ctx: CommandContext
-): Promise<void> {
+): Promise<number | void> {
   switch (name) {
+    case 'service-status': return serviceStatus(ctx);
     case 'transcribe': return transcribe(ctx);
     case 'upload': return upload(ctx);
     case 'status': return status(ctx);
@@ -153,6 +156,30 @@ async function status({ api, args, out }: CommandContext): Promise<void> {
   });
 }
 
+// ─── service-status ─────────────────────────────────────────────────────────
+
+/**
+ * GET /v1/status as one plain line (stdout) and an exit code: 0 taking new
+ * jobs, 3 new jobs paused for maintenance, 4 could not check. With --json the
+ * body as the API sent it. No answer, or an answer that is not the status, is
+ * "could not check" (exit 4, the reason on stderr), never "taking new jobs".
+ */
+async function serviceStatus({ api, args, out }: CommandContext): Promise<number> {
+  let body: unknown;
+  try {
+    body = await api.getServiceStatus();
+  } catch (err) {
+    const why = err instanceof ApiError ? `${err.code}: ${err.message}` : err instanceof Error ? err.message : String(err);
+    if (args.flags.json) process.stderr.write(COULD_NOT_CHECK_LINE + '\n');
+    else out.data(COULD_NOT_CHECK_LINE);
+    process.stderr.write(`(${why})\n`);
+    return EXIT_COULD_NOT_CHECK;
+  }
+  const { line, exitCode } = statusLine(body);
+  out.data(args.flags.json ? body : line);
+  return exitCode;
+}
+
 // ─── get ────────────────────────────────────────────────────────────────────
 
 async function get({ api, args, out }: CommandContext): Promise<void> {
@@ -267,7 +294,11 @@ async function balance({ api, args, out }: CommandContext): Promise<void> {
 
 function requireId(args: ParsedArgs, command: string): string {
   const id = args.positionals[0];
-  if (!id) throw new UsageError(`${command} needs a transcription ID.`);
+  if (!id) {
+    // `status` with no id is a mistake, not a question about the API: say where that question goes.
+    const hint = command === 'status' ? ' To see whether the API is taking new jobs, run: scriptivox-api service-status' : '';
+    throw new UsageError(`${command} needs a transcription ID.${hint}`);
+  }
   return id;
 }
 

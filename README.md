@@ -71,6 +71,9 @@ scriptivox-api delete 4f3c...
 
 # Check your balance
 scriptivox-api balance
+
+# Is the API taking new jobs right now? One line, no API key needed
+scriptivox-api service-status
 ```
 
 Run `scriptivox-api --help` for every flag.
@@ -88,12 +91,37 @@ Exit codes are part of the contract:
 | `0` | Success |
 | `1` | Usage error — bad arguments, missing API key, unreadable file |
 | `2` | API error — the machine-readable error code is printed on stderr |
+| `3` | `service-status` only: new jobs are paused for maintenance |
+| `4` | `service-status` only: the status could not be checked just now (this does not mean the API is down) |
 
 ```bash
 if ! scriptivox-api transcribe ./call.mp3 --wait --json > result.json; then
   echo "transcription failed with exit $?" >&2
 fi
 ```
+
+## Maintenance
+
+Now and then part of the API is paused for maintenance. A paused request fails with exit 2 and says so
+on stderr: `MAINTENANCE` with our message, how long to wait (`Retry after 300s.`), the time it is
+expected back if we set one, and a pointer to `service-status`. Nothing was created or charged, so run
+it again later. Jobs already accepted always finish.
+
+`scriptivox-api service-status` says whether the API is taking new jobs, in one line, before you
+send any. It calls `GET /v1/status`, which needs no API key (none is sent):
+
+```bash
+$ scriptivox-api service-status
+New jobs are paused for maintenance: Starting new jobs and uploads, expected back by 2026-11-21 10:40 UTC ("Planned upgrade."). Try again in 2400 seconds. Jobs already accepted finish.
+$ echo $?
+3
+```
+
+It exits `0` while new jobs are taken (also when only links to video and social media sites are
+paused: uploads and other file links still work, and the line names the pause), `3` while new jobs
+are paused, and `4` when the status could not be checked just now, which does not mean the API is
+down. `--json` prints the whole answer. Uptime and incident history:
+[status.scriptivox.com](https://status.scriptivox.com).
 
 ## Things worth knowing
 

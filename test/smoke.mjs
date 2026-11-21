@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
+import { createServer } from 'node:http';
 
 /**
  * Offline smoke tests for @scriptivox-api/cli.
@@ -45,7 +46,7 @@ test('--help exits 0 and lists every command', async () => {
   const { code, stdout } = await run(['--help']);
   assert.equal(code, 0);
   for (const cmd of [
-    'transcribe', 'upload', 'status', 'get', 'list', 'cancel', 'delete', 'balance',
+    'transcribe', 'upload', 'status', 'get', 'list', 'cancel', 'delete', 'balance', 'service-status',
   ]) {
     assert.ok(stdout.includes(cmd), `help is missing the ${cmd} command`);
   }
@@ -163,4 +164,168 @@ test('--help points at the documentation page, not just npm', async () => {
   // someone already holding the tool goes looking for the rest of it.
   const { stdout } = await run(['--help']);
   assert.match(stdout, /platform\.scriptivox\.com/);
+});
+
+// ─── service-status (service status Phase 8) ────────────────────────────────
+//
+// A stand-in for GET /v1/status on 127.0.0.1 (loopback only: nothing leaves the machine).
+// It records each request's headers so the test can prove no key is sent.
+
+const OPERATIONAL = {
+  status: 'operational',
+  accepting_new_jobs: true,
+  maintenance: null,
+  still_working: ['POST /v1/upload', 'POST /v1/transcribe', 'GET /v1/balance'],
+  upcoming: [],
+  checked_at: '2026-11-21T10:00:00.000Z',
+  status_page: 'https://status.scriptivox.com',
+};
+const pause = (scope, name, message = null, back_by = null, routes = ['POST /v1/upload', 'POST /v1/transcribe']) => ({ scope, name, message, routes, back_by });
+const BODIES = {
+  operational: OPERATIONAL,
+  planned: { ...OPERATIONAL, upcoming: [{ title: 'Planned upgrade', message: null, starts_at: '2026-11-22T02:00:00.000Z', ends_at: '2026-11-22T02:30:00.000Z' }] },
+  uploads: {
+    ...OPERATIONAL,
+    status: 'maintenance',
+    accepting_new_jobs: false,
+    maintenance: { paused: [pause('upload', 'Starting new jobs and uploads', 'Planned upgrade.', '2026-11-21T10:40:00.000Z')], retry_after_seconds: 2400 },
+    still_working: ['GET /v1/balance'],
+  },
+  link: {
+    ...OPERATIONAL,
+    status: 'maintenance',
+    maintenance: { paused: [pause('link', 'Transcribing from a link to a video or social media site (such as TikTok, Instagram, Facebook, X or Snapchat)', null, null, ['POST /v1/transcribe'])], retry_after_seconds: 300 },
+  },
+  full: {
+    ...OPERATIONAL,
+    status: 'maintenance',
+    accepting_new_jobs: false,
+    maintenance: { paused: [pause('global', 'All of Scriptivox, reading included', 'Back shortly.')], retry_after_seconds: 300 },
+    still_working: [],
+  },
+  unknown: { ...OPERATIONAL, status: 'unknown', accepting_new_jobs: null, still_working: null, upcoming: null },
+};
+
+async function withStatusServer(answer, fn) {
+  const seen = [];
+  const server = createServer((req, res) => {
+    seen.push({ url: req.url, headers: req.headers });
+    const { status = 200, type = 'application/json', body, headers = {} } = answer(req);
+    res.writeHead(status, { 'content-type': type, ...headers });
+    res.end(typeof body === 'string' ? body : JSON.stringify(body));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  try {
+    return await fn(`http://127.0.0.1:${server.address().port}/v1`, seen);
+  } finally {
+    server.closeAllConnections?.();
+    await new Promise((r) => server.close(r));
+  }
+}
+
+test('--help lists service-status and its exit codes 3 and 4', async () => {
+  const { stdout } = await run(['--help']);
+  assert.match(stdout, /service-status/);
+  assert.match(stdout, /3 {2}service-status: new jobs are paused/);
+  assert.match(stdout, /4 {2}service-status: could not check/);
+});
+
+test('service-status needs no API key, sends none, and prints one line', async () => {
+  await withStatusServer(() => ({ body: BODIES.operational }), async (base, seen) => {
+    const { code, stdout, stderr } = await run(['service-status'], { SCRIPTIVOX_BASE_URL: base });
+    assert.equal(code, 0, stderr);
+    assert.equal(stdout, 'The Scriptivox API is taking new jobs.\n');
+    assert.doesNotMatch(stderr, /No Scriptivox API key/);
+    assert.equal(seen[0].url, '/v1/status');
+    assert.equal(seen[0].headers.authorization, undefined);
+    // A key given anyway is still not sent to the status call.
+    await run(['service-status', '--api-key', 'sk_live_not_sent'], { SCRIPTIVOX_BASE_URL: base });
+    assert.equal(seen[1].headers.authorization, undefined);
+  });
+});
+
+test('service-status: new jobs paused is exit 3 with what, our message, the time and the wait', async () => {
+  await withStatusServer(() => ({ body: BODIES.uploads }), async (base) => {
+    const { code, stdout } = await run(['service-status'], { SCRIPTIVOX_BASE_URL: base });
+    assert.equal(code, 3);
+    assert.equal(
+      stdout,
+      'New jobs are paused for maintenance: Starting new jobs and uploads, expected back by 2026-11-21 10:40 UTC ("Planned upgrade."). Try again in 2400 seconds. Jobs already accepted finish.\n',
+    );
+    assert.equal(stdout.trim().split('\n').length, 1, 'one line');
+  });
+});
+
+test('service-status: full maintenance is exit 3; a link-only pause is exit 0 and still named', async () => {
+  await withStatusServer(() => ({ body: BODIES.full }), async (base) => {
+    const { code, stdout } = await run(['service-status'], { SCRIPTIVOX_BASE_URL: base });
+    assert.equal(code, 3);
+    assert.match(stdout, /^The Scriptivox API is paused for maintenance: All of Scriptivox, reading included \("Back shortly\."\)\./);
+  });
+  await withStatusServer(() => ({ body: BODIES.link }), async (base) => {
+    const { code, stdout } = await run(['service-status'], { SCRIPTIVOX_BASE_URL: base });
+    assert.equal(code, 0, 'uploads and file links are still taken');
+    assert.match(stdout, /^The Scriptivox API is taking new jobs\. Paused for maintenance: Transcribing from a link to a video or social media site/);
+    assert.doesNotMatch(stdout, /youtube/i);
+  });
+  await withStatusServer(() => ({ body: BODIES.planned }), async (base) => {
+    const { code, stdout } = await run(['service-status'], { SCRIPTIVOX_BASE_URL: base });
+    assert.equal(code, 0);
+    assert.equal(stdout, 'The Scriptivox API is taking new jobs. Planned maintenance: Planned upgrade, 2026-11-22 02:00 UTC to 2026-11-22 02:30 UTC.\n');
+  });
+});
+
+test('service-status: "unknown", an error page, an error answer or no answer is exit 4, never "taking new jobs"', async () => {
+  const cases = [
+    () => ({ body: BODIES.unknown }),
+    () => ({ type: 'text/html', body: '<html>challenge</html>' }),
+    () => ({ body: {} }),
+    () => ({ status: 503, body: { error: { code: 'MAINTENANCE', message: 'paused' } } }),
+    () => ({ status: 500, type: 'text/plain', body: 'oops' }),
+  ];
+  for (const answer of cases) {
+    await withStatusServer(answer, async (base) => {
+      const { code, stdout } = await run(['service-status'], { SCRIPTIVOX_BASE_URL: base });
+      assert.equal(code, 4, `${JSON.stringify(answer())} should be "could not check"`);
+      assert.match(stdout, /^Could not check whether the Scriptivox API is taking new jobs right now\. This does not mean it is down/);
+      assert.doesNotMatch(stdout, /is taking new jobs\./);
+    });
+  }
+  const { code, stdout } = await run(['service-status']); // the discard port: no answer at all
+  assert.equal(code, 4);
+  assert.match(stdout, /status\.scriptivox\.com/);
+});
+
+test('service-status --json prints the body as the API sent it, with the same exit codes', async () => {
+  await withStatusServer(() => ({ body: BODIES.uploads }), async (base) => {
+    const { code, stdout } = await run(['service-status', '--json'], { SCRIPTIVOX_BASE_URL: base });
+    assert.equal(code, 3);
+    assert.deepEqual(JSON.parse(stdout), BODIES.uploads);
+  });
+  const { code, stdout, stderr } = await run(['service-status', '--json']);
+  assert.equal(code, 4);
+  assert.equal(stdout, '', 'nothing on stdout when there is no status to print');
+  assert.match(stderr, /Could not check/);
+});
+
+test('status with no id points to service-status', async () => {
+  const { code, stderr } = await run(['status', '--api-key', 'sk_live_test']);
+  assert.equal(code, 1);
+  assert.match(stderr, /needs a transcription ID\. To see whether the API is taking new jobs, run: scriptivox-api service-status/);
+});
+
+test('a paused job says the wait, the time and where to look, and stays exit 2', async () => {
+  const paused = () => ({
+    status: 503,
+    headers: { 'retry-after': '2400' },
+    body: { error: { code: 'MAINTENANCE', message: 'Moving uploads to new servers.', scope: 'upload', back_by: '2026-11-21T10:40:00.000Z', status_url: 'https://api.scriptivox.com/v1/status' } },
+  });
+  await withStatusServer(paused, async (base) => {
+    const { code, stderr } = await run(['transcribe', 'https://example.com/a.mp3', '--api-key', 'sk_live_test'], { SCRIPTIVOX_BASE_URL: base });
+    assert.equal(code, 2, 'an API refusal keeps its exit code');
+    assert.match(stderr, /MAINTENANCE: Moving uploads to new servers\./);
+    assert.match(stderr, /Retry after 2400s\./);
+    assert.match(stderr, /Expected back by 2026-11-21 10:40 UTC\./);
+    assert.match(stderr, /See what is paused with: scriptivox-api service-status/);
+  });
 });

@@ -10,6 +10,7 @@ export const COMMANDS = [
   'cancel',
   'delete',
   'balance',
+  'service-status',
 ] as const;
 
 export type CommandName = (typeof COMMANDS)[number];
@@ -37,6 +38,8 @@ COMMANDS
   cancel <id>             Cancel a job before it starts transcribing (release its balance)
   delete <id>             Soft-delete a finished transcription
   balance                 Show remaining balance and estimated audio hours
+  service-status          Show whether the API is taking new jobs right now, in one line
+                          (no API key needed; exit 0, 3 or 4, see EXIT CODES)
 
 TRANSCRIBE OPTIONS
   --language <code>       ISO 639-1 code, e.g. en, es, fr. Recommended: passing it is faster
@@ -84,11 +87,14 @@ EXAMPLES
   scriptivox-api get 4f3c... --format srt --max-words 3 > interview.srt
   scriptivox-api list --status completed --limit 20 --json
   scriptivox-api balance
+  scriptivox-api service-status || echo "not taking new jobs right now"
 
 EXIT CODES
   0  success
   1  usage error (bad arguments, missing API key)
   2  API error — the error code is printed on stderr
+  3  service-status: new jobs are paused for maintenance
+  4  service-status: could not check just now (this does not mean the API is down)
 
 DOCUMENTATION
   ${DOCS_URL}
