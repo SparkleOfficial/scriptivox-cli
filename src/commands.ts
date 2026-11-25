@@ -96,10 +96,18 @@ async function transcribe({ api, args, out }: CommandContext): Promise<void> {
   }
 
   let lastStatus = '';
+  let lastWait = '';
   const finished = await api.waitForCompletion(job.id, (tick) => {
     if (tick.status !== lastStatus) {
       lastStatus = tick.status;
       out.note(`  ${tick.status} …`);
+    }
+    // Why it waits, once per reason (and per planned try): the API's own sentence. Its "in about N minutes"
+    // changes on every poll, so the line is printed on a change of reason or try, never of the words.
+    const wait = waitKey(tick);
+    if (wait !== lastWait) {
+      lastWait = wait;
+      if (wait && tick.progress) out.note(`  ${tick.progress}`);
     }
   });
 
@@ -116,6 +124,12 @@ async function transcribe({ api, args, out }: CommandContext): Promise<void> {
       `${formatCents(finished.cost_cents)}.`
   );
   out.data(finished);
+}
+
+/** What decides that the waiting line is printed again: the reason and, for a later try, its time. */
+export function waitKey(job: Transcription): string {
+  const w = job.waiting;
+  return w && typeof w.reason === 'string' ? `${w.reason}|${w.retry_at ?? ''}` : '';
 }
 
 // ─── upload ─────────────────────────────────────────────────────────────────
@@ -153,6 +167,7 @@ async function status({ api, args, out }: CommandContext): Promise<void> {
     created: job.created_at ?? '—',
     completed: job.completed_at ?? '—',
     error: job.error ? `${job.error.code}: ${job.error.message}` : undefined,
+    waiting: job.waiting ? job.progress ?? job.waiting.reason : undefined,
   });
 }
 

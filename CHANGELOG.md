@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.2.0
+
+- `transcribe --wait` prints why a job waits for its turn, or for a later try at a Google Drive link (the API's `progress` sentence), once per reason and per planned try, not on every poll. The status lines are as before.
+- `status` shows `waiting` with the same sentence while a job waits.
+
 ## 1.1.0
 
 - `scriptivox-api service-status`: whether the API is taking new jobs right now, in one line (GET /v1/status). It needs no API key and sends none. Exit `0` while new jobs are taken, `3` while they are paused for maintenance, `4` when the status could not be checked just now (this does not mean the API is down). `--json` prints the whole answer.

@@ -68,9 +68,24 @@ export interface CaptionOptions {
   strip_chars?: string;
 }
 
+/**
+ * Why a job waits for its turn, or for a later try at a Google Drive link (GET /v1/transcribe/{id} and each list
+ * item, while it waits; absent once it starts). `progress` says the same in a sentence.
+ */
+export interface TranscriptionWaiting {
+  /** account_drive_limit, account_download_limit, busy or drive_retry; new values may come. */
+  reason: string;
+  since: string | null;
+  /** drive_retry: when the next try is planned. */
+  retry_at: string | null;
+}
+
 export interface Transcription {
   id: string;
   status: string;
+  /** A sentence about the job's stage; while it waits, why. */
+  progress?: string | null;
+  waiting?: TranscriptionWaiting;
   audio_duration_seconds?: number | null;
   cost_cents?: number | null;
   language?: string | null;

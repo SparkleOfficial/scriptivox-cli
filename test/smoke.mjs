@@ -329,3 +329,50 @@ test('a paused job says the wait, the time and where to look, and stays exit 2',
     assert.match(stderr, /See what is paused with: scriptivox-api service-status/);
   });
 });
+
+// ─── why a job waits (scriptivox wait reasons Phase 3, 24 Nov 2026) ─────────
+// --wait prints the API's own sentence once per reason (and per planned Google Drive try), never on every poll;
+// status shows it while the job waits.
+
+test('--wait prints why a job waits once per reason and per planned try; status shows it', async () => {
+  const ID = 'b2c3d4e5-f6a7-4901-8cde-f12345678901';
+  const share = { reason: 'account_drive_limit', since: '2026-11-24T12:00:00Z', retry_at: null };
+  const sayShare = 'Waiting: Google Drive links on this account download 3 at a time. This one starts by itself when one of yours finishes.';
+  const retry = (at, mins) => ({
+    waiting: { reason: 'drive_retry', since: '2026-11-24T12:01:00Z', retry_at: at },
+    progress: `Google Drive did not send this file just now. Trying again at ${at.slice(11, 16)} UTC (in about ${mins} minutes). Nothing is charged while it waits.`,
+  });
+  const polls = [
+    { status: 'created', waiting: share, progress: sayShare },
+    { status: 'created', waiting: share, progress: sayShare },
+    { status: 'downloading', ...retry('2026-11-24T12:06:00Z', 5) },
+    { status: 'downloading', ...retry('2026-11-24T12:06:00Z', 4) },
+    { status: 'downloading', ...retry('2026-11-24T12:16:00Z', 10) },
+    { status: 'processing', progress: 'Transcription is in progress.' },
+    { status: 'completed', progress: 'Transcription completed successfully.', audio_duration_seconds: 60, cost_cents: 0.33, result: { full_transcript: 'hi' } },
+  ];
+  let n = 0;
+  const answer = (req) => {
+    if (req.method === 'POST') return { body: { id: ID, status: 'created', message: 'ok' } };
+    if (req.url.startsWith(`/v1/transcribe/${ID}`)) return { body: { id: ID, ...polls[Math.min(n++, polls.length - 1)] } };
+    return { status: 404, body: { error: { code: 'NOT_FOUND', message: 'no' } } };
+  };
+  await withStatusServer(answer, async (base) => {
+    const { code, stderr } = await run(
+      ['transcribe', 'https://drive.google.com/file/d/x/view', '--wait', '--poll-interval', '0', '--api-key', 'sk_live_test'],
+      { SCRIPTIVOX_BASE_URL: base },
+    );
+    assert.equal(code, 0, stderr);
+    const lines = stderr.split('\n');
+    assert.equal(lines.filter((l) => l.includes(sayShare)).length, 1, 'the share line once');
+    assert.equal(lines.filter((l) => l.includes('Trying again at 12:06 UTC')).length, 1, 'one line per planned try, not per poll');
+    assert.equal(lines.filter((l) => l.includes('Trying again at 12:16 UTC')).length, 1, 'a new try time is a new line');
+    assert.ok(lines.some((l) => l.trim() === 'processing …'));
+  });
+  n = 0;
+  await withStatusServer(answer, async (base) => {
+    const { code, stdout } = await run(['status', ID, '--api-key', 'sk_live_test'], { SCRIPTIVOX_BASE_URL: base });
+    assert.equal(code, 0);
+    assert.match(stdout, /waiting.*Google Drive links on this account download 3 at a time/);
+  });
+});

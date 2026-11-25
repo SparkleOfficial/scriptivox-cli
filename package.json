@@ -1,6 +1,6 @@
 {
   "name": "@scriptivox-api/cli",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Command-line client for the Scriptivox transcription API — transcribe audio and video from your shell or a script. 119 languages, speaker diarization, word-level timestamps, SRT/VTT/text export.",
   "keywords": [
     "cli",
